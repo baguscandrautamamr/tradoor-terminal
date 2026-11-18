@@ -1,15 +1,15 @@
 // Multi-Exchange Market & Orderflow Engine for Tradoor Terminal (React + Vite)
-// Supports Live Binance WebSocket + high-frequency Orderflow / Footprint / TPO synthesis
+// Supports Live Binance REST Klines + WebSocket + high-frequency Orderflow / Footprint / TPO synthesis
 
 export const SYMBOLS = [
-  { symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT', basePrice: 91450, tickSize: 10, stepSize: 0.001, volScale: 1.0 },
-  { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT', basePrice: 3125, tickSize: 1, stepSize: 0.01, volScale: 8.5 },
-  { symbol: 'SOLUSDT', base: 'SOL', quote: 'USDT', basePrice: 194.5, tickSize: 0.2, stepSize: 0.1, volScale: 45 },
-  { symbol: 'BNBUSDT', base: 'BNB', quote: 'USDT', basePrice: 642.0, tickSize: 0.5, stepSize: 0.01, volScale: 12 },
-  { symbol: 'XRPUSDT', base: 'XRP', quote: 'USDT', basePrice: 2.48, tickSize: 0.005, stepSize: 1, volScale: 1200 },
-  { symbol: 'SUIUSDT', base: 'SUI', quote: 'USDT', basePrice: 3.35, tickSize: 0.005, stepSize: 1, volScale: 900 },
-  { symbol: 'DOGEUSDT', base: 'DOGE', quote: 'USDT', basePrice: 0.365, tickSize: 0.0005, stepSize: 10, volScale: 8500 },
-  { symbol: 'HYPEUSDT', base: 'HYPE', quote: 'USDT', basePrice: 26.8, tickSize: 0.05, stepSize: 0.1, volScale: 180 },
+  { symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT', basePrice: 64750, tickSize: 10, stepSize: 0.001, volScale: 1.0 },
+  { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT', basePrice: 2640, tickSize: 1, stepSize: 0.01, volScale: 8.5 },
+  { symbol: 'SOLUSDT', base: 'SOL', quote: 'USDT', basePrice: 154.5, tickSize: 0.2, stepSize: 0.1, volScale: 45 },
+  { symbol: 'BNBUSDT', base: 'BNB', quote: 'USDT', basePrice: 592.0, tickSize: 0.5, stepSize: 0.01, volScale: 12 },
+  { symbol: 'XRPUSDT', base: 'XRP', quote: 'USDT', basePrice: 0.548, tickSize: 0.001, stepSize: 1, volScale: 1200 },
+  { symbol: 'SUIUSDT', base: 'SUI', quote: 'USDT', basePrice: 2.15, tickSize: 0.005, stepSize: 1, volScale: 900 },
+  { symbol: 'DOGEUSDT', base: 'DOGE', quote: 'USDT', basePrice: 0.142, tickSize: 0.0005, stepSize: 10, volScale: 8500 },
+  { symbol: 'AVAXUSDT', base: 'AVAX', quote: 'USDT', basePrice: 27.8, tickSize: 0.05, stepSize: 0.1, volScale: 180 },
 ];
 
 export const EXCHANGES = [
@@ -31,28 +31,25 @@ export const TIMEFRAMES = [
 
 // Build footprint price clusters inside a single candle
 export function buildCandleFootprint(open, high, low, close, volume, tickSize) {
-  const safeTick = tickSize || Math.max((high - low) / 8, 0.01);
-  const minLevel = Math.floor(low / safeTick) * safeTick;
-  const maxLevel = Math.ceil(high / safeTick) * safeTick;
-  const levels = [];
-  const totalSteps = Math.min(Math.max(Math.round((maxLevel - minLevel) / safeTick), 3), 14);
-  const step = (high - low) / Math.max(totalSteps, 1) || safeTick;
+  const range = Math.max(high - low, tickSize || 0.01);
+  const totalSteps = 8;
+  const step = range / totalSteps;
 
   let totalDelta = 0;
   let maxLevelVol = 0;
   let pocPrice = close;
   const isBull = close >= open;
+  const levels = [];
 
   for (let i = 0; i <= totalSteps; i++) {
     const price = Number((low + i * step).toFixed(6));
-    // Bell-curve weight centered near body middle
     const bodyMid = (open + close) / 2;
-    const distFromMid = Math.abs(price - bodyMid) / (Math.max(high - low, step));
-    const weight = Math.max(0.15, Math.exp(-distFromMid * distFromMid * 3.2));
-    const levelVol = (volume / (totalSteps + 1)) * weight * (0.75 + Math.random() * 0.5);
+    const distFromMid = Math.abs(price - bodyMid) / range;
+    const weight = Math.max(0.18, Math.exp(-distFromMid * distFromMid * 3.2));
+    const levelVol = (volume / (totalSteps + 1)) * weight * (0.8 + Math.random() * 0.4);
 
     const bullBias = isBull ? 0.56 : 0.44;
-    const askRatio = Math.min(0.88, Math.max(0.12, bullBias + (Math.random() - 0.5) * 0.38));
+    const askRatio = Math.min(0.86, Math.max(0.14, bullBias + (Math.random() - 0.5) * 0.34));
     const askVol = Math.round(levelVol * askRatio * 10) / 10;
     const bidVol = Math.round(levelVol * (1 - askRatio) * 10) / 10;
     const delta = Number((askVol - bidVol).toFixed(1));
@@ -69,8 +66,8 @@ export function buildCandleFootprint(open, high, low, close, volume, tickSize) {
       askVol,
       totalVol: Number((bidVol + askVol).toFixed(1)),
       delta,
-      askImbalance: askVol > bidVol * 2.4,
-      bidImbalance: bidVol > askVol * 2.4,
+      askImbalance: askVol > bidVol * 2.3,
+      bidImbalance: bidVol > askVol * 2.3,
       isPOC: false,
     });
   }
@@ -80,30 +77,101 @@ export function buildCandleFootprint(open, high, low, close, volume, tickSize) {
   });
 
   return {
-    levels: levels.reverse(), // highest price first
+    levels: levels.reverse(),
     delta: Number(totalDelta.toFixed(1)),
     pocPrice,
     maxLevelVol,
   };
 }
 
+// Fetch real historical OHLCV klines from Binance public API so chart matches live WebSocket price
+export async function fetchLiveBinanceKlines(symbolConfig, tfId = '1m', limit = 95) {
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbolConfig.symbol}&interval=${tfId}&limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
+  const raw = await res.json();
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty klines');
+
+  let cumDelta = 0;
+  let openInterest = Math.round( parseFloat(raw[0][4]) * symbolConfig.volScale * 420 );
+
+  return raw.map((k) => {
+    const time = k[0];
+    const open = parseFloat(k[1]);
+    const high = parseFloat(k[2]);
+    const low = parseFloat(k[3]);
+    const close = parseFloat(k[4]);
+    const volume = parseFloat(k[5]);
+    const takerBuyVol = parseFloat(k[9] || volume * 0.5);
+    const takerSellVol = Math.max(0, volume - takerBuyVol);
+    const realDelta = Number((takerBuyVol - takerSellVol).toFixed(1));
+
+    const fp = buildCandleFootprint(open, high, low, close, volume, symbolConfig.tickSize);
+    const delta = !Number.isNaN(realDelta) && realDelta !== 0 ? realDelta : fp.delta;
+    cumDelta = Number((cumDelta + delta).toFixed(1));
+    openInterest = Math.max(1000, Math.round(openInterest + delta * 0.35));
+
+    return {
+      time,
+      open,
+      high,
+      low,
+      close,
+      volume: Number(volume.toFixed(2)),
+      delta,
+      cumDelta,
+      pocPrice: fp.pocPrice,
+      footprint: fp.levels,
+      maxLevelVol: fp.maxLevelVol,
+      openInterest,
+    };
+  });
+}
+
+// Re-anchor synthetic candles to match an incoming real live price if there is a gap > 0.4%
+export function rebaseCandlesToPrice(candles, targetPrice, tickSize) {
+  if (!candles || candles.length === 0 || !targetPrice) return candles;
+  const lastClose = candles[candles.length - 1].close;
+  const ratio = targetPrice / lastClose;
+  if (Math.abs(1 - ratio) < 0.004) return candles;
+
+  return candles.map((c) => {
+    const open = Number((c.open * ratio).toFixed(6));
+    const high = Number((c.high * ratio).toFixed(6));
+    const low = Number((c.low * ratio).toFixed(6));
+    const close = Number((c.close * ratio).toFixed(6));
+    const fp = buildCandleFootprint(open, high, low, close, c.volume, tickSize);
+    return {
+      ...c,
+      open,
+      high,
+      low,
+      close,
+      pocPrice: fp.pocPrice,
+      footprint: fp.levels,
+      maxLevelVol: fp.maxLevelVol,
+    };
+  });
+}
+
 // Generate initial historical candles with rich orderflow metadata
-export function generateHistoricalCandles(symbolConfig, tfSeconds = 60, count = 90) {
-  const { basePrice, tickSize, volScale } = symbolConfig;
+export function generateHistoricalCandles(symbolConfig, tfSeconds = 60, count = 90, anchorPrice = null) {
+  const { tickSize, volScale } = symbolConfig;
+  const basePrice = anchorPrice || symbolConfig.basePrice;
   const now = Math.floor(Date.now() / (tfSeconds * 1000)) * (tfSeconds * 1000);
   const candles = [];
-  let price = basePrice * (0.985 + Math.random() * 0.015);
+  let price = basePrice * (0.992 + Math.random() * 0.008);
   let cumDelta = 0;
   let openInterest = Math.round(basePrice * volScale * 420);
 
   for (let i = count; i >= 0; i--) {
     const time = now - i * tfSeconds * 1000;
-    const volatility = basePrice * 0.0022 * Math.sqrt(tfSeconds / 60);
-    const drift = (Math.random() - 0.492) * volatility;
+    const volatility = basePrice * 0.0018 * Math.sqrt(tfSeconds / 60);
+    const drift = (Math.random() - 0.495) * volatility;
     const open = price;
     const close = Math.max(tickSize, Number((open + drift).toFixed(6)));
-    const high = Number((Math.max(open, close) + Math.random() * volatility * 0.85).toFixed(6));
-    const low = Number((Math.min(open, close) - Math.random() * volatility * 0.85).toFixed(6));
+    const high = Number((Math.max(open, close) + Math.random() * volatility * 0.75).toFixed(6));
+    const low = Number((Math.min(open, close) - Math.random() * volatility * 0.75).toFixed(6));
     const volume = Number(((Math.abs(close - open) / volatility + 0.5) * 140 * volScale * (0.7 + Math.random() * 0.8)).toFixed(1));
 
     const fp = buildCandleFootprint(open, high, low, close, volume, tickSize);
@@ -247,7 +315,7 @@ export function generateOrderBook(midPrice, tickSize, volScale = 1, depth = 16) 
   const bidRatio = Math.round((bidCum / Math.max(askCum + bidCum, 1)) * 100);
 
   return {
-    asks: asks.reverse(), // highest ask at top, lowest ask right above midPrice
+    asks: asks.reverse(),
     bids,
     maxTotal,
     bidRatio,

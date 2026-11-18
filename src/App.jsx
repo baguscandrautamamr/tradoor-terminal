@@ -4,6 +4,8 @@ import {
   EXCHANGES,
   TIMEFRAMES,
   generateHistoricalCandles,
+  fetchLiveBinanceKlines,
+  rebaseCandlesToPrice,
   generateOrderBook,
   buildCandleFootprint,
 } from './services/marketEngine';
@@ -59,13 +61,13 @@ export default function App() {
       symbol: 'BTCUSDT',
       side: 'LONG',
       qty: 0.25,
-      entryPrice: 91180,
-      markPrice: 91450,
-      liqPrice: 86850,
-      marginUsd: 1140,
+      entryPrice: 64580,
+      markPrice: 64750,
+      liqPrice: 61450,
+      marginUsd: 810,
       leverage: 20,
-      tp: 92800,
-      sl: 90400,
+      tp: 65800,
+      sl: 63900,
     },
   ]);
   const [limitOrders, setLimitOrders] = useState([]);
@@ -76,10 +78,10 @@ export default function App() {
       symbol: 'BTCUSDT',
       side: 'LONG',
       leverage: 20,
-      entryPrice: 90640,
-      exitPrice: 91290,
+      entryPrice: 64120,
+      exitPrice: 64690,
       qty: 0.3,
-      pnl: 195.0,
+      pnl: 171.0,
       roe: 34.4,
       tag: 'Orderflow Absorption',
       note: 'Delta negatif diserap habis di area VAL + pantulan nPOC.',
@@ -90,8 +92,8 @@ export default function App() {
       symbol: 'SOLUSDT',
       side: 'SHORT',
       leverage: 15,
-      entryPrice: 196.8,
-      exitPrice: 194.9,
+      entryPrice: 156.8,
+      exitPrice: 154.9,
       qty: 25,
       pnl: 47.5,
       roe: 14.5,
@@ -104,58 +106,89 @@ export default function App() {
   const [oneClickDom, setOneClickDom] = useState(false);
   const prevPriceRef = useRef(symbolConfig.basePrice);
 
-  // Re-initialize historical data when symbol or timeframe changes
+  // Load real Binance historical klines (with instant synthetic fallback) when symbol or timeframe changes
   useEffect(() => {
-    const hist = generateHistoricalCandles(symbolConfig, timeframe.seconds, 95);
-    setCandles(hist);
-    const lastClose = hist[hist.length - 1].close;
-    prevPriceRef.current = lastClose;
-    setOrderBook(generateOrderBook(lastClose, symbolConfig.tickSize, symbolConfig.volScale));
+    let cancelled = false;
 
-    // Seed initial tape & liquidations
-    const now = new Date();
-    const initTrades = Array.from({ length: 18 }, (_, idx) => {
-      const side = Math.random() > 0.48 ? 'BUY' : 'SELL';
-      const p = lastClose + (Math.random() - 0.5) * symbolConfig.tickSize * 4;
-      const sz = Number(((Math.random() * 1.8 + 0.05) * symbolConfig.volScale).toFixed(3));
-      return {
-        id: `t-init-${idx}`,
-        price: p,
-        size: sz,
-        usdValue: p * sz,
-        side,
-        timeStr: new Date(now.getTime() - idx * 1400).toLocaleTimeString([], { hour12: false }),
-      };
-    });
-    setTrades(initTrades);
+    const initMarketData = async () => {
+      let loadedCandles = null;
+      try {
+        loadedCandles = await fetchLiveBinanceKlines(symbolConfig, timeframe.id, 95);
+      } catch {
+        loadedCandles = generateHistoricalCandles(symbolConfig, timeframe.seconds, 95);
+      }
+      if (cancelled || !loadedCandles || loadedCandles.length === 0) return;
 
-    const initLiqs = [
-      {
-        id: 'liq-1',
-        exchange: 'BN',
-        symbol: symbolConfig.symbol,
-        side: 'SHORT',
-        price: lastClose * 1.002,
-        usdValue: 84500,
-      },
-      {
-        id: 'liq-2',
-        exchange: 'BB',
-        symbol: symbolConfig.symbol,
-        side: 'LONG',
-        price: lastClose * 0.998,
-        usdValue: 42300,
-      },
-      {
-        id: 'liq-3',
-        exchange: 'OKX',
-        symbol: 'ETHUSDT',
-        side: 'SHORT',
-        price: 3132.5,
-        usdValue: 128900,
-      },
-    ];
-    setLiquidations(initLiqs);
+      setCandles(loadedCandles);
+      const lastClose = loadedCandles[loadedCandles.length - 1].close;
+      prevPriceRef.current = lastClose;
+      setOrderBook(generateOrderBook(lastClose, symbolConfig.tickSize, symbolConfig.volScale));
+
+      // Keep demo position entry anchored near real BTC price so it always appears on chart
+      if (symbolConfig.symbol === 'BTCUSDT') {
+        setPositions((prev) =>
+          prev.map((p) =>
+            p.id === 'init-pos-1' && Math.abs(p.entryPrice - lastClose) / lastClose > 0.03
+              ? {
+                  ...p,
+                  entryPrice: Number((lastClose * 0.9975).toFixed(1)),
+                  markPrice: lastClose,
+                  liqPrice: Number((lastClose * 0.952).toFixed(1)),
+                }
+              : p
+          )
+        );
+      }
+
+      const now = new Date();
+      const initTrades = Array.from({ length: 18 }, (_, idx) => {
+        const side = Math.random() > 0.48 ? 'BUY' : 'SELL';
+        const p = lastClose + (Math.random() - 0.5) * symbolConfig.tickSize * 4;
+        const sz = Number(((Math.random() * 1.8 + 0.05) * symbolConfig.volScale).toFixed(3));
+        return {
+          id: `t-init-${idx}`,
+          price: p,
+          size: sz,
+          usdValue: p * sz,
+          side,
+          timeStr: new Date(now.getTime() - idx * 1400).toLocaleTimeString([], { hour12: false }),
+        };
+      });
+      setTrades(initTrades);
+
+      const initLiqs = [
+        {
+          id: 'liq-1',
+          exchange: 'BN',
+          symbol: symbolConfig.symbol,
+          side: 'SHORT',
+          price: lastClose * 1.002,
+          usdValue: 84500,
+        },
+        {
+          id: 'liq-2',
+          exchange: 'BB',
+          symbol: symbolConfig.symbol,
+          side: 'LONG',
+          price: lastClose * 0.998,
+          usdValue: 42300,
+        },
+        {
+          id: 'liq-3',
+          exchange: 'OKX',
+          symbol: symbolConfig.symbol,
+          side: 'SHORT',
+          price: lastClose * 1.0035,
+          usdValue: 128900,
+        },
+      ];
+      setLiquidations(initLiqs);
+    };
+
+    initMarketData();
+    return () => {
+      cancelled = true;
+    };
   }, [symbolConfig, timeframe]);
 
   // Helper to apply incoming tick price & volume to state
@@ -177,7 +210,6 @@ export default function App() {
         ...prev.slice(0, 49),
       ]);
 
-      // Occasional liquidation event on big ticks
       if (usdVal > 28000 && Math.random() > 0.55) {
         const exchBadges = ['BN', 'BB', 'OKX', 'HL', 'BG'];
         setLiquidations((prev) => [
@@ -195,9 +227,47 @@ export default function App() {
 
       setCandles((prev) => {
         if (!prev || prev.length === 0) return prev;
-        const updated = [...prev];
-        const last = { ...updated[updated.length - 1] };
+        // Guard against any price gap between synthetic baseline and real WebSocket price
+        const currentLast = prev[prev.length - 1];
+        const gapRatio = Math.abs(tradePrice - currentLast.close) / Math.max(currentLast.close, 0.0001);
+        const aligned =
+          gapRatio > 0.004
+            ? rebaseCandlesToPrice(prev, tradePrice, symbolConfig.tickSize)
+            : [...prev];
+
+        const last = { ...aligned[aligned.length - 1] };
         prevPriceRef.current = last.close;
+
+        // Check if timeframe bucket rolled over to start a new candle
+        const bucketMs = timeframe.seconds * 1000;
+        const currentBucket = Math.floor(Date.now() / bucketMs) * bucketMs;
+
+        if (currentBucket > last.time) {
+          const fp = buildCandleFootprint(
+            tradePrice,
+            tradePrice + symbolConfig.tickSize,
+            tradePrice - symbolConfig.tickSize,
+            tradePrice,
+            tradeQty,
+            symbolConfig.tickSize
+          );
+          const signedDelta = side === 'BUY' ? tradeQty : -tradeQty;
+          const newCandle = {
+            time: currentBucket,
+            open: last.close,
+            high: Math.max(last.close, tradePrice),
+            low: Math.min(last.close, tradePrice),
+            close: tradePrice,
+            volume: Number(tradeQty.toFixed(2)),
+            delta: Number(signedDelta.toFixed(1)),
+            cumDelta: Number((last.cumDelta + signedDelta).toFixed(1)),
+            pocPrice: fp.pocPrice,
+            footprint: fp.levels,
+            maxLevelVol: fp.maxLevelVol,
+            openInterest: last.openInterest,
+          };
+          return [...aligned.slice(1), newCandle];
+        }
 
         last.close = tradePrice;
         if (tradePrice > last.high) last.high = tradePrice;
@@ -207,7 +277,6 @@ export default function App() {
         last.delta = Number((last.delta + signedDelta).toFixed(1));
         last.cumDelta = Number((last.cumDelta + signedDelta).toFixed(1));
 
-        // Rebuild footprint levels dynamically for the active bar
         const fp = buildCandleFootprint(
           last.open,
           last.high,
@@ -220,8 +289,8 @@ export default function App() {
         last.pocPrice = fp.pocPrice;
         last.maxLevelVol = fp.maxLevelVol;
 
-        updated[updated.length - 1] = last;
-        return updated;
+        aligned[aligned.length - 1] = last;
+        return aligned;
       });
 
       setOrderBook(generateOrderBook(tradePrice, symbolConfig.tickSize, symbolConfig.volScale));
@@ -263,7 +332,7 @@ export default function App() {
         return remaining;
       });
     },
-    [symbolConfig]
+    [symbolConfig, timeframe]
   );
 
   // Connect to Live Binance WebSocket with automatic fallback to synthetic high-frequency stream
@@ -281,7 +350,7 @@ export default function App() {
       };
       ws.onmessage = (event) => {
         const now = Date.now();
-        if (now - lastWsTick < 220) return; // throttle UI updates to ~4.5 FPS for smooth DOM
+        if (now - lastWsTick < 220) return;
         lastWsTick = now;
         try {
           const data = JSON.parse(event.data);
@@ -304,7 +373,6 @@ export default function App() {
       setWsStatus('ORDERFLOW_SIM');
     }
 
-    // Fallback / Hybrid Simulation Loop if WS hasn't ticked in the last 1.2s
     simTimer = setInterval(() => {
       if (Date.now() - lastWsTick > 1100) {
         setWsStatus((prev) => (prev === 'LIVE_WS' ? prev : 'ORDERFLOW_SIM'));
